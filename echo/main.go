@@ -17,7 +17,7 @@ func main() {
 			log.Printf("error unmarshaling echo message: %s", err)
 			return err
 		}
-		body["type"] = "echo_reply"
+		body["type"] = "echo_ok"
 		return n.Reply(msg, body)
 	})
 
