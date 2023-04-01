@@ -2,9 +2,9 @@ package main
 
 import (
 	"encoding/json"
-	"log"
 
 	maelstrom "github.com/jepsen-io/maelstrom/demo/go"
+	log "github.com/sirupsen/logrus"
 )
 
 type MessageStore struct {
@@ -19,10 +19,26 @@ func (ms *MessageStore) GetMessages() []float64 {
 	return ms.Messages
 }
 
+func sendReliableMessage(n *maelstrom.Node, neighbor string, body map[string]any) {
+	err := n.Send(neighbor, body)
+	if err == nil {
+		log.Info("error sending broadcast message to %s: %s", neighbor, err)
+	}
+}
+
+func deserializeNeighborList(neigbhors []interface{}) []string {
+	var result []string
+	for _, neighbor := range neigbhors {
+		result = append(result, neighbor.(string))
+	}
+	return result
+}
+
 func main() {
 	var messageStore MessageStore
 
 	n := maelstrom.NewNode()
+	var neigbhors []string
 
 	n.Handle("broadcast", func(msg maelstrom.Message) error {
 		var body map[string]any
@@ -31,7 +47,11 @@ func main() {
 			log.Printf("error unmarshaling broadcast message: %s", err)
 			return err
 		}
+
 		messageStore.AddMessage(body["message"].(float64))
+		for _, neighbor := range neigbhors {
+			go sendReliableMessage(n, neighbor, body)
+		}
 		return n.Reply(msg, map[string]string{"type": "broadcast_ok"})
 	})
 
@@ -43,9 +63,19 @@ func main() {
 	})
 
 	n.Handle("topology", func(msg maelstrom.Message) error {
-		body := make(map[string]any)
-		body["type"] = "topology_ok"
-		return n.Reply(msg, body)
+		log.Infof("received topology message: %s", msg.Body)
+		requestBody := make(map[string]any)
+		err := json.Unmarshal(msg.Body, &requestBody)
+		if err != nil {
+			log.Printf("error unmarshaling topology message: %s", err)
+			return err
+		}
+
+		neigbhors = deserializeNeighborList(requestBody["topology"].(map[string]interface{})[n.ID()].([]interface{}))
+
+		responseBody := make(map[string]any)
+		responseBody["type"] = "topology_ok"
+		return n.Reply(msg, responseBody)
 	})
 
 	if err := n.Run(); err != nil {
